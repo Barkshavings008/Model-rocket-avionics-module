@@ -106,7 +106,7 @@ void setup() {
 
 
     // might need to change direction names based off installation direction of IMU
-}
+}   // hello
 
 void loop() {
     imu_data = read_mpu6050();
