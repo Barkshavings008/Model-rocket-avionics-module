@@ -2,6 +2,8 @@
 #include <Wire.h>
 #include <ESP32Servo.h>
 #include <Adafruit_BMP280.h>
+#include <SPI.h>
+#include <SdFat.h> // for SD card
 
 #define SERVO_PIN 0
 #define MPU6050_ADDRESS 0x68
@@ -21,6 +23,8 @@
 #define SCL_PIN 9
 #define MISO_PIN 5
 #define MOSI_PIN 6
+#define SCK_PIN 4
+#define CS_PIN 7
 
 enum State {
     ASCENT,
@@ -53,12 +57,15 @@ struct BMP_data bmp_data;
 
 Servo servo;
 Adafruit_BMP280 bmp; // Create the Adafruit BMP280 object
+SdFat sd;
+FsFile dataFile;
 
 ////////////////////////
 // Function prototypes//
 ////////////////////////
 void wake_up_mpu6050(void);
 void wake_up_bmp280(void);
+void wake_up_sd_card(void);
 struct IMU_data read_mpu6050(void);
 struct BMP_data read_bmp280(void);
 void setup_nosecone (void);
@@ -68,6 +75,7 @@ int average_roll(struct IMU_data imu_data);
 int average_altitude(struct BMP_data bmp_data);
 void print_all_info(struct IMU_data imu_data, struct BMP_data bmp_data, int pitch_offset,
     int roll_offset, int altitude_offset);
+void log_data(float pitch, float roll, float altitude);
 ////////////////////////
 
 int pitch_offset = 0;
@@ -81,6 +89,7 @@ void setup() {
     
     wake_up_mpu6050();
     wake_up_bmp280();
+    wake_up_sd_card();
     
     servo.attach(SERVO_PIN); 
 
@@ -106,12 +115,12 @@ void setup() {
 
 
     // might need to change direction names based off installation direction of IMU
-}   // hello
+}
 
 void loop() {
     imu_data = read_mpu6050();
     bmp_data = read_bmp280();
-
+    
     print_all_info(imu_data, bmp_data, pitch_offset, roll_offset, altitude_offset);
 
     if (open_condition(imu_data, start_time, pitch_offset, roll_offset) == PROCEED && stage == ASCENT) {
@@ -130,6 +139,9 @@ void loop() {
         servo.write(CLOSED);
         digitalWrite(LED_PIN,LOW);
     }
+
+    log_data(imu_data.pitch - pitch_offset, imu_data.roll - roll_offset,
+        bmp_data.altitude - altitude_offset);
 
     delay(500); // delay will need to be shortened in the real flight
 }
@@ -291,4 +303,56 @@ void print_all_info(struct IMU_data imu_data, struct BMP_data bmp_data, int pitc
     Serial.println(bmp_data.altitude - altitude_offset);
 
     Serial.println("-----------------------------");
+}
+
+//////////////////////////////
+/////// SD CARD READER ///////
+/////////////////////////////
+
+void wake_up_sd_card(void) {
+    pinMode(CS_PIN, OUTPUT);
+    digitalWrite(CS_PIN, HIGH);          // deselect until we're ready
+    SPI.begin(SCK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);  // configure the bus
+
+    if (!sd.begin(CS_PIN, SD_SCK_MHZ(16))) { // Initialize the SD card at 16 MHz
+        Serial.println("SD card failed!");
+
+        // Blink the LED to indicate SD card failure
+        unsigned long error_millis = millis();
+        while (millis() - error_millis < 5000) {
+            digitalWrite(LED_PIN, HIGH);
+            delay(200);
+            digitalWrite(LED_PIN, LOW);
+            delay(800);
+            digitalWrite(LED_PIN, HIGH);
+            delay(800);
+            digitalWrite(LED_PIN, LOW);
+            delay(200);
+        }
+        return;
+    }
+
+    Serial.println("SD card connected!");
+
+    // dataFile = sd.open("flight_data.txt", FILE_WRITE);
+    dataFile = sd.open("flight_data.txt", O_RDWR | O_CREAT | O_AT_END);
+    // Open the file for reading and writing, create it if it doesn't exist, and append to the end
+
+    if (!dataFile) {
+        Serial.println("Failed to open flight_data.txt");
+    }
+}
+
+void log_data(float pitch, float roll, float altitude) {
+    if (dataFile) {
+        dataFile.print("Pitch: ");
+        dataFile.print(pitch);
+        dataFile.print(", Roll: ");
+        dataFile.print(roll);
+        dataFile.print(", Altitude: ");
+        dataFile.println(altitude);
+        dataFile.flush(); // Ensure data is written to the SD card
+    } else {
+        Serial.println("Data file not open!");
+    }
 }
